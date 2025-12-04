@@ -1,8 +1,5 @@
-# WinSpace
-
+<img src="assets/logo.png" alt="WinSpace" width="300">
 A Linux-based utility for creating bootable Windows USB drives. Built with Flutter, WinSpace provides an intuitive graphical interface for Linux users who need to create Windows installation media quickly and easily.
-
-![WinSpace](assets/logo.png){:width="50px"}
 
 ## Features
 
