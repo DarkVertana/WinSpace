@@ -69,7 +69,7 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
     'Windows 10 Version 22H2': {
       'releaseDate': 'October 2022',
       'requirements': '• Processor: 1 GHz or faster\n• RAM: 1 GB (32-bit) or 2 GB (64-bit)\n• Storage: 16 GB (32-bit) or 20 GB (64-bit)\n• Graphics card: DirectX 9 or later',
-      'isoUrl': 'https://software.download.prss.microsoft.com/dbazure/Win10_22H2_EnglishInternational_x64v1.iso?t=76b3b38d-cbe0-443c-b1b6-611a8e64a51a&P1=1764400952&P2=601&P3=2&P4=OxenjH1Vb9%2fgopiuo9Nctm3ytSqev5p5%2f1dCRESNgcxQwG0kqqK7Z3zDymDFg7CfKKhBXn6JRBHG1XkHllyIiZMlB1krjwkyx1yW%2bpkZ%2bO2E1hXBUY6AjxeQ5ST%2fTwXi3reBi%2fuXIiUNHrvv%2bSuc7RBRt0PikPJnPPVD%2bQ05OT3l9f5Uvk4YfoiLUi%2b0%2fRjilndZXCkOsl%2b124c9mOtiv2U%2fs5xrwP9iXXG8wtByY7Q%2bB16j%2fHaKLLsuBNWswHMLanbwlnlfDJZ%2bfAOeoO97xSqGT30MFvSIVvxnFBzEAmepgbukTIRHut1OjHj8fveLKAjYeyJyO%2bA7e4yo3lT6eg%3d%3d',
+      'isoUrl': 'https://software.download.prss.microsoft.com/dbazure/Win10_22H2_EnglishInternational_x64v1.iso?t=a8bcd97c-f61b-4fb8-8013-ec5ec878f630&P1=1764958805&P2=601&P3=2&P4=0%2fWwW4SOvfVoyYYncJcYjT6%2bOvTiKn%2bDRQYyJPf%2bz%2f4eBOSu6N5OKCmMCn8rTeMzpvvh5ccSfTFeO5zXHDOtm%2fQK3%2ffPJxmDMdlpw3Qh35f7DKaQfj%2fSvQ1R0z7wrIJNZo4YmmLfkBD7PtG3T2xcMSAgE%2fqk5aISa8FwCa0BkFksupjpSQm%2bqE3WfSz57fwkQqAmuZbIas7ids1qkQ6W2v5sZeCGCymsSs78Lwgbt0XviDCiorU4BZiH%2f%2fQdWLjlY1ggefTXKG8SG0B2TQd4kjNETENp9P79rZJbvjnFprE5%2bzLzSLdydv%2fTNZ7NhkvQ0ZGWpHrRFmDfNk%2fGavSFfw%3d%3d',
     },
   };
 
@@ -141,6 +141,7 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
     if (isoUrl == null) {
       setState(() {
         _downloadStatus = 'Error: ISO URL not found';
+        _terminalOutput.add('✗ Error: ISO URL not found for $_selectedWindowsVersion');
       });
       return;
     }
@@ -150,12 +151,28 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
       _downloadComplete = false;
       _downloadStatus = 'Downloading ISO file...';
       _progress = 0.0;
+      _showTerminal = true;
+      _terminalOutput = ['Starting Windows ISO download...'];
+      _terminalOutput.add('Version: $_selectedWindowsVersion');
     });
 
     try {
       final client = http.Client();
       final request = http.Request('GET', Uri.parse(isoUrl));
+      
+      _addTerminalOutput('Connecting to Microsoft servers...');
+      
       final response = await client.send(request);
+      
+      if (response.statusCode != 200) {
+        _addTerminalOutput('✗ Error: Server returned status code ${response.statusCode}');
+        setState(() {
+          _isDownloading = false;
+          _downloadStatus = 'Download failed: HTTP ${response.statusCode}';
+        });
+        client.close();
+        return;
+      }
       
       // Get download directory
       final directory = await getDownloadsDirectory() ?? await getApplicationDocumentsDirectory();
@@ -165,8 +182,16 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
 
       // Track download progress
       final contentLength = response.contentLength ?? 0;
+      final contentLengthMB = (contentLength / (1024 * 1024)).toStringAsFixed(0);
+      
+      _addTerminalOutput('Connected! Starting download...');
+      _addTerminalOutput('File size: $contentLengthMB MB');
+      _addTerminalOutput('Saving to: $filePath');
+      _addTerminalOutput('');
+      
       final sink = file.openWrite();
       int downloaded = 0;
+      int lastLoggedPercent = -1;
 
       response.stream.listen(
         (List<int> chunk) {
@@ -174,16 +199,54 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
           sink.add(chunk);
           
           if (contentLength > 0 && mounted) {
+            final percent = (downloaded / contentLength * 100).toInt();
+            final downloadedMB = (downloaded / (1024 * 1024)).toStringAsFixed(0);
+            
             setState(() {
               _progress = downloaded / contentLength;
-              _downloadStatus = 'Downloading: ${(_progress * 100).toStringAsFixed(1)}%';
+              _downloadStatus = 'Downloading: $percent% ($downloadedMB MB / $contentLengthMB MB)';
             });
+            
+            // Log every 5% progress to terminal
+            if (percent % 5 == 0 && percent != lastLoggedPercent) {
+              lastLoggedPercent = percent;
+              _addTerminalOutput('Download progress: $percent% ($downloadedMB MB / $contentLengthMB MB)');
+            }
           }
         },
         onDone: () async {
+          await sink.flush();
           await sink.close();
           client.close();
+          
           if (mounted) {
+            // Verify the downloaded file
+            final downloadedFile = File(filePath);
+            final fileExists = await downloadedFile.exists();
+            final fileSize = fileExists ? await downloadedFile.length() : 0;
+            
+            _addTerminalOutput('');
+            _addTerminalOutput('Download finished!');
+            _addTerminalOutput('Verifying downloaded file...');
+            _addTerminalOutput('File exists: $fileExists');
+            _addTerminalOutput('File size: ${(fileSize / (1024 * 1024)).toStringAsFixed(0)} MB');
+            
+            // Check if file size is reasonable (at least 3GB for Windows ISO, typically 4-8GB)
+            if (!fileExists || fileSize < 3 * 1024 * 1024 * 1024) {
+              _addTerminalOutput('✗ Error: Downloaded file appears to be incomplete or corrupted');
+              _addTerminalOutput('Expected 4-8 GB for Windows ISO, got ${(fileSize / (1024 * 1024)).toStringAsFixed(0)} MB');
+              setState(() {
+                _isDownloading = false;
+                _downloadComplete = false;
+                _downloadStatus = 'Download failed: File incomplete';
+              });
+              return;
+            }
+            
+            _addTerminalOutput('✓ ISO file verified successfully!');
+            _addTerminalOutput('');
+            _addTerminalOutput('Starting USB creation process...');
+            
             setState(() {
               _isDownloading = false;
               _downloadComplete = true;
@@ -191,8 +254,9 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
               _downloadStatus = 'Download complete!';
               _progress = 1.0;
             });
+            
             // Start USB process after download completes
-            Future.delayed(const Duration(seconds: 1), () {
+            Future.delayed(const Duration(seconds: 2), () {
               if (mounted) {
                 _startUSBProcess();
               }
@@ -203,6 +267,8 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
           sink.close();
           client.close();
           if (mounted) {
+            _addTerminalOutput('');
+            _addTerminalOutput('✗ Download error: $error');
             setState(() {
               _isDownloading = false;
               _downloadStatus = 'Download failed: $error';
@@ -212,6 +278,7 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
       );
     } catch (e) {
       if (mounted) {
+        _addTerminalOutput('✗ Download error: $e');
         setState(() {
           _isDownloading = false;
           _downloadStatus = 'Download error: $e';
@@ -251,9 +318,32 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
       isoPath = _selectedISOPath;
     }
 
-    if (isoPath == null || !await File(isoPath).exists()) {
+    if (isoPath == null) {
       setState(() {
-        _usbCreationStatus = 'Error: ISO file not found';
+        _usbCreationStatus = 'Error: ISO file path not set';
+        _terminalOutput.add('✗ Error: ISO file path not set');
+      });
+      return;
+    }
+
+    final isoFile = File(isoPath);
+    if (!await isoFile.exists()) {
+      setState(() {
+        _usbCreationStatus = 'Error: ISO file not found at $isoPath';
+        _terminalOutput.add('✗ Error: ISO file not found at $isoPath');
+      });
+      return;
+    }
+
+    // Verify ISO file size (should be at least 1GB for Windows)
+    final isoSize = await isoFile.length();
+    final isoSizeMB = (isoSize / (1024 * 1024)).toStringAsFixed(0);
+    
+    if (isoSize < 1024 * 1024 * 100) { // Less than 100MB is definitely wrong
+      setState(() {
+        _usbCreationStatus = 'Error: ISO file appears corrupted (only $isoSizeMB MB)';
+        _terminalOutput.add('✗ Error: ISO file appears corrupted or incomplete');
+        _terminalOutput.add('  File size: $isoSizeMB MB (expected 4-8 GB for Windows 10/11)');
       });
       return;
     }
@@ -262,9 +352,23 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
       _isCreatingUSB = true;
       _usbCreationStatus = 'Starting USB creation process...';
       _progress = 0.0;
-      _terminalOutput = ['Starting Windows bootable USB creation process...'];
-      _terminalOutput.add('Note: You will be prompted for your password ONCE to perform all disk operations.');
+      _showTerminal = true;
     });
+    
+    // Only reset terminal if not coming from download (to preserve download logs)
+    if (_isoSelectionMethod != 'download') {
+      setState(() {
+        _terminalOutput = ['Starting Windows bootable USB creation process...'];
+      });
+    }
+    
+    _addTerminalOutput('');
+    _addTerminalOutput('=== USB Creation Process ===');
+    _addTerminalOutput('ISO file: $isoPath');
+    _addTerminalOutput('ISO size: $isoSizeMB MB');
+    _addTerminalOutput('USB device: $usbDevice');
+    _addTerminalOutput('');
+    _addTerminalOutput('Note: You will be prompted for your password ONCE to perform all disk operations.');
 
     // Create temp directories
     final tempDir = Directory.systemTemp.createTempSync('winspace_iso_');
@@ -272,7 +376,9 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
     final scriptFile = File('${Directory.systemTemp.path}/winspace_usb_script_${DateTime.now().millisecondsSinceEpoch}.sh');
 
     try {
-      // Create shell script with all commands
+      // Create shell script with all commands for UEFI bootable USB
+      // Uses Rufus-style partitioning for maximum compatibility
+      // Handles large files (>4GB) by splitting install.wim for FAT32 compatibility
       // Use r'' for raw string to avoid interpolation issues, then replace variables
       final scriptContent = r'''#!/bin/bash
 set -e
@@ -283,23 +389,54 @@ TEMP_DIR="TEMP_DIR_PLACEHOLDER"
 USB_MOUNT_DIR="USB_MOUNT_DIR_PLACEHOLDER"
 
 echo "Step 1: Unmounting USB device..."
-umount "$USB_DEVICE" "$USB_DEVICE"1 "$USB_DEVICE"2 2>/dev/null || true
+umount "$USB_DEVICE"* 2>/dev/null || true
+sleep 1
+
+echo "Step 2: Wiping existing partition table..."
+# Clear first and last 1MB to remove any existing partition signatures
+dd if=/dev/zero of="$USB_DEVICE" bs=1M count=1 status=none 2>/dev/null || true
+dd if=/dev/zero of="$USB_DEVICE" bs=1M seek=$(($(blockdev --getsz "$USB_DEVICE") / 2048 - 1)) count=1 status=none 2>/dev/null || true
 sleep 0.5
 
-echo "Step 2: Creating partition table..."
-parted -s "$USB_DEVICE" mklabel msdos
-sleep 0.5
-
-echo "Step 2: Creating FAT32 partition..."
-parted -s "$USB_DEVICE" mkpart primary fat32 0% 100%
+echo "Step 2: Creating GPT partition table (Rufus-style for UEFI)..."
+# Use sgdisk for precise GPT control (like Rufus does)
+if command -v sgdisk &> /dev/null; then
+    echo "Using sgdisk for GPT partitioning..."
+    sgdisk --zap-all "$USB_DEVICE" 2>/dev/null || true
+    # Create partition with type 0700 (Microsoft Basic Data) - NOT EFI System Partition
+    # This is what Rufus uses - UEFI firmware will still find /EFI/Boot/bootx64.efi
+    sgdisk -n 1:2048:0 -t 1:0700 -c 1:"WINSPACE" "$USB_DEVICE"
+else
+    echo "Using parted for GPT partitioning..."
+    parted -s "$USB_DEVICE" mklabel gpt
+    # Create partition starting at 1MiB for alignment
+    parted -s "$USB_DEVICE" mkpart primary fat32 1MiB 100%
+    parted -s "$USB_DEVICE" name 1 "WINSPACE"
+    # DO NOT set esp flag - that hides the partition from Windows Setup!
+    # Just set msftdata flag for Microsoft Basic Data type
+    parted -s "$USB_DEVICE" set 1 msftdata on 2>/dev/null || true
+fi
 sleep 0.5
 
 echo "Step 2: Probing partitions..."
 partprobe "$USB_DEVICE"
-sleep 1
+sleep 2
 
-echo "Step 3: Formatting USB drive as FAT32..."
-mkfs.vfat -F 32 -n WINSPACE "$USB_DEVICE"1
+# Detect partition name (handle both /dev/sdX1 and /dev/nvmeXn1p1 styles)
+if [ -b "${USB_DEVICE}1" ]; then
+    PARTITION="${USB_DEVICE}1"
+elif [ -b "${USB_DEVICE}p1" ]; then
+    PARTITION="${USB_DEVICE}p1"
+else
+    echo "ERROR: Could not find partition"
+    exit 1
+fi
+echo "Partition detected: $PARTITION"
+
+echo "Step 3: Formatting USB drive as FAT32 (large cluster for better compatibility)..."
+# Use cluster size 4096 (default) which works well for most USB drives
+# Label limited to 11 chars for FAT32
+mkfs.fat -F 32 -n "WINSPACE" "$PARTITION"
 sleep 1
 
 echo "Step 4: Creating mount directories..."
@@ -307,21 +444,151 @@ mkdir -p "$TEMP_DIR"
 mkdir -p "$USB_MOUNT_DIR"
 
 echo "Step 4: Mounting ISO and USB drive..."
-mount -o loop "$ISO_PATH" "$TEMP_DIR"
-mount "$USB_DEVICE"1 "$USB_MOUNT_DIR"
+mount -o loop,ro "$ISO_PATH" "$TEMP_DIR"
+mount "$PARTITION" "$USB_MOUNT_DIR"
 
-echo "Step 5: Copying Windows files to USB drive..."
+echo "Step 5: Checking for large files (FAT32 has 4GB limit)..."
+
+# Check if install.wim exists and is larger than 4GB (4294967296 bytes)
+INSTALL_WIM=""
+if [ -f "$TEMP_DIR/sources/install.wim" ]; then
+    INSTALL_WIM="$TEMP_DIR/sources/install.wim"
+elif [ -f "$TEMP_DIR/Sources/install.wim" ]; then
+    INSTALL_WIM="$TEMP_DIR/Sources/install.wim"
+fi
+
+NEED_SPLIT=false
+if [ -n "$INSTALL_WIM" ]; then
+    WIM_SIZE=$(stat -c%s "$INSTALL_WIM" 2>/dev/null || echo "0")
+    echo "Found install.wim: $((WIM_SIZE / 1024 / 1024)) MB"
+    if [ "$WIM_SIZE" -gt 4294967296 ]; then
+        echo "WARNING: install.wim is larger than 4GB ($((WIM_SIZE / 1024 / 1024)) MB)"
+        echo "Will split into smaller files for FAT32 compatibility..."
+        NEED_SPLIT=true
+    fi
+fi
+
+echo "Step 6: Copying Windows files to USB drive..."
 echo "This may take several minutes depending on ISO size..."
-rsync -a -v --progress "$TEMP_DIR"/ "$USB_MOUNT_DIR"/
 
-echo "Step 6: Making USB drive bootable..."
-parted -s "$USB_DEVICE" set 1 boot on
+if [ "$NEED_SPLIT" = true ]; then
+    # Copy all files EXCEPT install.wim (will handle separately)
+    echo "Copying files (excluding large install.wim)..."
+    rsync -r -v --progress --no-owner --no-group --exclude='install.wim' "$TEMP_DIR"/ "$USB_MOUNT_DIR"/
+    
+    echo "Step 6b: Splitting install.wim for FAT32 compatibility..."
+    # Check if wimlib-imagex is available
+    if command -v wimlib-imagex &> /dev/null; then
+        echo "Using wimlib-imagex to split install.wim into 3800MB chunks..."
+        mkdir -p "$USB_MOUNT_DIR/sources"
+        wimlib-imagex split "$INSTALL_WIM" "$USB_MOUNT_DIR/sources/install.swm" 3800
+        echo "Successfully split install.wim into .swm files"
+    else
+        echo "WARNING: wimlib-imagex not found. Attempting to install..."
+        apt-get update && apt-get install -y wimtools 2>/dev/null || true
+        
+        if command -v wimlib-imagex &> /dev/null; then
+            echo "Using wimlib-imagex to split install.wim..."
+            mkdir -p "$USB_MOUNT_DIR/sources"
+            wimlib-imagex split "$INSTALL_WIM" "$USB_MOUNT_DIR/sources/install.swm" 3800
+            echo "Successfully split install.wim into .swm files"
+        else
+            echo "ERROR: Cannot split large file. Please install wimtools:"
+            echo "  sudo apt install wimtools"
+            echo "Then try again."
+            exit 1
+        fi
+    fi
+else
+    # No large files, copy everything normally
+    rsync -r -v --progress --no-owner --no-group "$TEMP_DIR"/ "$USB_MOUNT_DIR"/
+fi
 
-echo "Step 7: Unmounting drives..."
-umount "$TEMP_DIR" 2>/dev/null || true
-umount "$USB_MOUNT_DIR" 2>/dev/null || true
+echo "Step 7: Ensuring EFI boot files are in correct location..."
+# Create EFI Boot directory structure if not exists
+mkdir -p "$USB_MOUNT_DIR/EFI/Boot"
 
-echo "✓ Windows bootable USB created successfully!"
+# Copy bootx64.efi to the correct location (handles different case variations in ISO)
+if [ -f "$USB_MOUNT_DIR/efi/boot/bootx64.efi" ]; then
+    cp "$USB_MOUNT_DIR/efi/boot/bootx64.efi" "$USB_MOUNT_DIR/EFI/Boot/bootx64.efi" 2>/dev/null || true
+elif [ -f "$USB_MOUNT_DIR/EFI/boot/bootx64.efi" ]; then
+    cp "$USB_MOUNT_DIR/EFI/boot/bootx64.efi" "$USB_MOUNT_DIR/EFI/Boot/bootx64.efi" 2>/dev/null || true
+elif [ -f "$TEMP_DIR/efi/boot/bootx64.efi" ]; then
+    cp "$TEMP_DIR/efi/boot/bootx64.efi" "$USB_MOUNT_DIR/EFI/Boot/bootx64.efi"
+elif [ -f "$TEMP_DIR/EFI/boot/bootx64.efi" ]; then
+    cp "$TEMP_DIR/EFI/boot/bootx64.efi" "$USB_MOUNT_DIR/EFI/Boot/bootx64.efi"
+fi
+
+echo "Step 8: Verifying USB contents..."
+echo "Checking for required boot files..."
+if [ -f "$USB_MOUNT_DIR/EFI/Boot/bootx64.efi" ] || [ -f "$USB_MOUNT_DIR/efi/boot/bootx64.efi" ]; then
+    echo "✓ EFI boot file found"
+else
+    echo "WARNING: EFI boot file not found - USB may not boot on UEFI systems"
+fi
+if [ -d "$USB_MOUNT_DIR/sources" ]; then
+    echo "✓ Windows sources folder found"
+fi
+
+echo "Step 9: Syncing and unmounting drives..."
+echo "Flushing all data to USB drive (this may take a moment)..."
+sync
+echo "Data sync complete."
+
+# Function to unmount (non-blocking approach)
+unmount_safe() {
+    local mount_point=$1
+    local name=$2
+    
+    echo "Unmounting $name..."
+    
+    # Try normal unmount first (non-blocking check)
+    if umount "$mount_point" 2>/dev/null; then
+        echo "$name unmounted successfully"
+        return 0
+    fi
+    
+    # If normal unmount failed, use lazy unmount (doesn't block)
+    echo "Using lazy unmount for $name (non-blocking)..."
+    umount -l "$mount_point" 2>/dev/null || true
+    
+    # Wait a moment for lazy unmount to process
+    sleep 2
+    
+    # Check if still mounted
+    if mountpoint -q "$mount_point" 2>/dev/null; then
+        echo "Attempting force unmount for $name..."
+        umount -f "$mount_point" 2>/dev/null || true
+        sleep 1
+        
+        # Final check
+        if mountpoint -q "$mount_point" 2>/dev/null; then
+            echo "WARNING: $name may still be mounted at $mount_point"
+            echo "This is usually safe - you can unmount manually later if needed"
+            return 1
+        else
+            echo "✓ $name unmounted successfully (force)"
+            return 0
+        fi
+    else
+        echo "✓ $name unmounted successfully (lazy)"
+        return 0
+    fi
+}
+
+# Unmount ISO first
+unmount_safe "$TEMP_DIR" "ISO"
+
+# Check if anything is using the USB mount point (non-blocking, don't wait)
+echo "Checking for processes accessing USB..."
+lsof "$USB_MOUNT_DIR" 2>/dev/null | head -3 | grep -v COMMAND && echo "Note: Some processes may be accessing USB (this is usually fine)" || echo "No active processes found"
+
+# Unmount USB drive
+unmount_safe "$USB_MOUNT_DIR" "USB drive"
+
+echo ""
+echo "✓ UEFI bootable Windows USB created successfully!"
+echo "You can safely remove the USB drive now."
 '''
           .replaceAll('USB_DEVICE_PLACEHOLDER', usbDevice)
           .replaceAll('ISO_PATH_PLACEHOLDER', isoPath)
@@ -404,62 +671,128 @@ echo "✓ Windows bootable USB created successfully!"
             _addTerminalOutput(line);
             
             // Update progress based on steps
-            if (line.contains('Step 1:')) {
-              setState(() {
-                _progress = 0.1;
-                _usbCreationStatus = 'Unmounted USB device';
-              });
-            } else if (line.contains('Step 2: Creating partition table')) {
-              setState(() {
-                _progress = 0.15;
-                _usbCreationStatus = 'Creating partition table';
-              });
-            } else if (line.contains('Step 2: Creating FAT32 partition')) {
-              setState(() {
-                _progress = 0.2;
-                _usbCreationStatus = 'Creating partition';
-              });
-            } else if (line.contains('Step 3:')) {
-              setState(() {
-                _progress = 0.3;
-                _usbCreationStatus = 'Formatting USB drive';
-              });
-            } else if (line.contains('Step 4: Mounting')) {
-              setState(() {
-                _progress = 0.4;
-                _usbCreationStatus = 'Mounted ISO and USB';
-              });
-            } else if (line.contains('Step 5:')) {
-              setState(() {
-                _progress = 0.5;
-                _usbCreationStatus = 'Copying Windows files';
-              });
-            } else if (line.contains('%')) {
-              // Parse rsync progress (e.g., "1,234,567  50%")
-              final progressMatch = RegExp(r'(\d+)%').firstMatch(line);
-              if (progressMatch != null) {
-                final percent = int.tryParse(progressMatch.group(1) ?? '0') ?? 0;
-                setState(() {
-                  _progress = 0.5 + (percent / 100) * 0.3; // 50% to 80%
-                  _usbCreationStatus = 'Copying Windows files: $percent%';
-                });
-              }
-            } else if (line.contains('Step 6:')) {
-              setState(() {
-                _progress = 0.9;
-                _usbCreationStatus = 'Made USB bootable';
-              });
-            } else if (line.contains('Step 7:')) {
-              setState(() {
-                _progress = 0.95;
-                _usbCreationStatus = 'Unmounting drives';
-              });
-            } else if (line.contains('✓')) {
-              setState(() {
-                _progress = 1.0;
-                _usbCreationStatus = 'USB creation complete!';
-              });
-            }
+                            if (line.contains('Step 1:')) {
+                              setState(() {
+                                _progress = 0.05;
+                                _usbCreationStatus = 'Unmounting USB device';
+                              });
+                            } else if (line.contains('Step 2: Wiping')) {
+                              setState(() {
+                                _progress = 0.08;
+                                _usbCreationStatus = 'Wiping existing partition table';
+                              });
+                            } else if (line.contains('Step 2: Creating GPT')) {
+                              setState(() {
+                                _progress = 0.12;
+                                _usbCreationStatus = 'Creating GPT partition (Rufus-style)';
+                              });
+                            } else if (line.contains('Using sgdisk')) {
+                              setState(() {
+                                _progress = 0.14;
+                                _usbCreationStatus = 'Creating Microsoft Basic Data partition';
+                              });
+                            } else if (line.contains('Using parted')) {
+                              setState(() {
+                                _progress = 0.14;
+                                _usbCreationStatus = 'Creating partition with parted';
+                              });
+                            } else if (line.contains('Step 3:')) {
+                              setState(() {
+                                _progress = 0.18;
+                                _usbCreationStatus = 'Formatting USB drive as FAT32';
+                              });
+                            } else if (line.contains('Step 4: Mounting')) {
+                              setState(() {
+                                _progress = 0.22;
+                                _usbCreationStatus = 'Mounting ISO and USB drive';
+                              });
+                            } else if (line.contains('Step 5:')) {
+                              setState(() {
+                                _progress = 0.25;
+                                _usbCreationStatus = 'Checking for large files...';
+                              });
+                            } else if (line.contains('WARNING: install.wim is larger')) {
+                              setState(() {
+                                _progress = 0.28;
+                                _usbCreationStatus = 'Large file detected, will split for FAT32';
+                              });
+                            } else if (line.contains('Step 6:') && !line.contains('Step 6b')) {
+                              setState(() {
+                                _progress = 0.30;
+                                _usbCreationStatus = 'Copying Windows files';
+                              });
+                            } else if (line.contains('Step 6b:')) {
+                              setState(() {
+                                _progress = 0.75;
+                                _usbCreationStatus = 'Splitting install.wim for FAT32';
+                              });
+                            } else if (line.contains('Successfully split')) {
+                              setState(() {
+                                _progress = 0.82;
+                                _usbCreationStatus = 'Split complete!';
+                              });
+                            } else if (line.contains('%')) {
+                              // Parse rsync progress (e.g., "1,234,567  50%")
+                              final progressMatch = RegExp(r'(\d+)%').firstMatch(line);
+                              if (progressMatch != null) {
+                                final percent = int.tryParse(progressMatch.group(1) ?? '0') ?? 0;
+                                setState(() {
+                                  _progress = 0.30 + (percent / 100) * 0.45; // 30% to 75%
+                                  _usbCreationStatus = 'Copying Windows files: $percent%';
+                                });
+                              }
+                            } else if (line.contains('Step 7:')) {
+                              setState(() {
+                                _progress = 0.85;
+                                _usbCreationStatus = 'Ensuring EFI boot files are correct';
+                              });
+                            } else if (line.contains('Step 8:')) {
+                              setState(() {
+                                _progress = 0.90;
+                                _usbCreationStatus = 'Verifying USB contents';
+                              });
+                            } else if (line.contains('Step 9:')) {
+                              setState(() {
+                                _progress = 0.92;
+                                _usbCreationStatus = 'Syncing and unmounting drives';
+                              });
+                            } else if (line.contains('Flushing all data')) {
+                              setState(() {
+                                _progress = 0.93;
+                                _usbCreationStatus = 'Flushing data to USB...';
+                              });
+                            } else if (line.contains('Data sync complete')) {
+                              setState(() {
+                                _progress = 0.94;
+                                _usbCreationStatus = 'Data sync complete';
+                              });
+                            } else if (line.contains('Unmounting ISO')) {
+                              setState(() {
+                                _progress = 0.95;
+                                _usbCreationStatus = 'Unmounting ISO...';
+                              });
+                            } else if (line.contains('Unmounting USB')) {
+                              setState(() {
+                                _progress = 0.96;
+                                _usbCreationStatus = 'Unmounting USB drive...';
+                              });
+                            } else if (line.contains('USB drive unmounted successfully') || 
+                                       line.contains('ISO unmounted successfully')) {
+                              setState(() {
+                                _progress = 0.98;
+                                _usbCreationStatus = 'Unmount complete';
+                              });
+                            } else if (line.contains('✓') && line.contains('UEFI bootable')) {
+                              setState(() {
+                                _progress = 1.0;
+                                _usbCreationStatus = 'UEFI bootable USB created!';
+                              });
+                            } else if (line.contains('You can safely remove')) {
+                              setState(() {
+                                _progress = 1.0;
+                                _usbCreationStatus = 'Complete! Safe to remove USB';
+                              });
+                            }
           }
         }
       });
@@ -496,7 +829,7 @@ echo "✓ Windows bootable USB created successfully!"
         process.kill();
         exitCode = -1;
       } finally {
-        timeoutTimer?.cancel();
+        timeoutTimer.cancel();
       }
 
       if (exitCode != 0) {
@@ -1476,63 +1809,124 @@ echo "✓ Windows bootable USB created successfully!"
     // Show download step if downloading
     if (_isDownloading || (!_downloadComplete && _isoSelectionMethod == 'download')) {
       return Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 600),
-          child: Padding(
-            padding: const EdgeInsets.all(32.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    color: Colors.blue[100],
-                    shape: BoxShape.circle,
+        child: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 700),
+            child: Padding(
+              padding: const EdgeInsets.all(32.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Container(
+                        width: 100,
+                        height: 100,
+                        decoration: BoxDecoration(
+                          color: Colors.blue[100],
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.download,
+                          size: 56,
+                          color: Colors.blue,
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      IconButton(
+                        icon: Icon(
+                          _showTerminal ? Icons.terminal : Icons.terminal_outlined,
+                          size: 32,
+                          color: Colors.blue[600],
+                        ),
+                        tooltip: 'Toggle Terminal Output',
+                        onPressed: () {
+                          setState(() {
+                            _showTerminal = !_showTerminal;
+                          });
+                        },
+                      ),
+                    ],
                   ),
-                  child: const Icon(
-                    Icons.download,
-                    size: 64,
-                    color: Colors.blue,
+                  const SizedBox(height: 24),
+                  Text(
+                    'Downloading Windows ISO',
+                    style: TextStyle(
+                      fontSize: 24,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.blue[900],
+                    ),
+                    textAlign: TextAlign.center,
                   ),
-                ),
-                const SizedBox(height: 32),
-                Text(
-                  'Downloading Windows ISO',
-                  style: TextStyle(
-                    fontSize: 24,
-                    fontWeight: FontWeight.w600,
-                    color: Colors.blue[900],
+                  const SizedBox(height: 12),
+                  Text(
+                    _downloadStatus,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.grey[700],
+                    ),
+                    textAlign: TextAlign.center,
                   ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  _downloadStatus,
-                  style: TextStyle(
-                    fontSize: 16,
-                    color: Colors.grey[700],
+                  const SizedBox(height: 24),
+                  LinearProgressIndicator(
+                    value: _progress,
+                    backgroundColor: Colors.grey[300],
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[600]!),
+                    minHeight: 8,
                   ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 32),
-                LinearProgressIndicator(
-                  value: _progress,
-                  backgroundColor: Colors.grey[300],
-                  valueColor: AlwaysStoppedAnimation<Color>(Colors.blue[600]!),
-                  minHeight: 8,
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  '${(_progress * 100).toStringAsFixed(1)}%',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                    color: Colors.grey[600],
+                  const SizedBox(height: 12),
+                  Text(
+                    '${(_progress * 100).toStringAsFixed(1)}%',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.grey[600],
+                    ),
                   ),
-                ),
-              ],
+                  if (_showTerminal) ...[
+                    const SizedBox(height: 24),
+                    Container(
+                      height: 250,
+                      width: double.infinity,
+                      decoration: BoxDecoration(
+                        color: Colors.black87,
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(color: Colors.grey[700]!),
+                      ),
+                      padding: const EdgeInsets.all(12),
+                      child: SingleChildScrollView(
+                        reverse: true,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: _terminalOutput.map((line) {
+                            Color textColor = Colors.greenAccent;
+                            if (line.contains('✗') || line.contains('Error')) {
+                              textColor = Colors.redAccent;
+                            } else if (line.contains('✓')) {
+                              textColor = Colors.lightGreenAccent;
+                            } else if (line.contains('===')) {
+                              textColor = Colors.cyanAccent;
+                            }
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text(
+                                line,
+                                style: TextStyle(
+                                  fontFamily: 'monospace',
+                                  fontSize: 12,
+                                  color: textColor,
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
         ),
@@ -1633,14 +2027,22 @@ echo "✓ Windows bootable USB created successfully!"
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: _terminalOutput.map((line) {
+                          Color textColor = Colors.greenAccent;
+                          if (line.contains('✗') || line.contains('Error')) {
+                            textColor = Colors.redAccent;
+                          } else if (line.contains('✓')) {
+                            textColor = Colors.lightGreenAccent;
+                          } else if (line.contains('===')) {
+                            textColor = Colors.cyanAccent;
+                          }
                           return Padding(
                             padding: const EdgeInsets.only(bottom: 4),
                             child: Text(
                               line,
-                              style: const TextStyle(
+                              style: TextStyle(
                                 fontFamily: 'monospace',
                                 fontSize: 12,
-                                color: Colors.greenAccent,
+                                color: textColor,
                               ),
                             ),
                           );
