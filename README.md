@@ -1,204 +1,284 @@
-<img src="assets/logo.png" alt="WinSpace" width="300">
-A Linux-based utility for creating bootable Windows USB drives. Built with Flutter, WinSpace provides an intuitive graphical interface for Linux users who need to create Windows installation media quickly and easily.
+# WinSpace
 
-## Features
+**Professional Windows USB Bootable Media Creator for Linux**
 
-- 🎯 **Easy-to-Use GUI**: Step-by-step wizard interface that guides you through the entire process
-- 📥 **Download Windows ISOs**: Download Windows 11 or Windows 10 ISO files directly from Microsoft servers
-- 📁 **Select Existing ISOs**: Use your own Windows ISO files if you already have them
-- 🔌 **Automatic USB Detection**: Automatically detects and lists available USB drives
-- ⚡ **Fast & Reliable**: Uses efficient Linux tools (`parted`, `mkfs.vfat`, `rsync`) for USB creation
-- 📊 **Real-time Progress**: View detailed progress and terminal output during USB creation
-- 🛡️ **Safe Operations**: Clear warnings and consent requirements before erasing USB drives
-- 🎨 **Modern UI**: Clean, modern interface built with Flutter Material Design
-
-## Supported Windows Versions
-
-- **Windows 11 25H2** (Latest)
-- **Windows 10 Version 22H2**
-
-## Requirements
-
-### System Requirements
-
-- **Operating System**: Linux (tested on Ubuntu/Debian-based distributions)
-- **Flutter SDK**: 3.10.0 or higher
-- **Disk Space**: At least 8 GB free space for ISO downloads and USB creation
-- **USB Drive**: Minimum 8 GB capacity (16 GB or larger recommended)
-
-### System Dependencies
-
-The following Linux packages are required for USB creation:
-
-- `parted` - Partition management
-- `mkfs.vfat` - FAT32 filesystem creation (usually in `dosfstools` package)
-- `rsync` - File synchronization
-- `pkexec` or `sudo` - For elevated privileges
-
-Install dependencies on Ubuntu/Debian:
-```bash
-sudo apt update
-sudo apt install -y parted dosfstools rsync policykit-1
-```
-
-For development, you'll also need:
-```bash
-sudo apt install -y ninja-build clang libgtk-3-dev mesa-utils build-essential cmake pkg-config
-```
-
-Or use the provided setup script:
-```bash
-chmod +x setup_linux_deps.sh
-./setup_linux_deps.sh
-```
-
-## Installation
-
-### From Source
-
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/DarkVertana/WinSpace.git
-   cd WinSpace
-   ```
-
-2. **Install Flutter dependencies**:
-   ```bash
-   flutter pub get
-   ```
-
-3. **Run the application**:
-   ```bash
-   flutter run -d linux
-   ```
-
-### Building for Linux
-
-1. **Build the application**:
-   ```bash
-   flutter build linux
-   ```
-
-2. **Run the built application**:
-   ```bash
-   ./build/linux/x64/release/bundle/winspaces
-   ```
-
-## Usage
-
-### Step 1: Launch WinSpace
-Start the application and you'll see the welcome screen.
-
-### Step 2: Choose ISO Source
-- **Select ISO file**: Choose an existing Windows ISO file from your computer
-- **Download ISO file**: Download Windows 11 or Windows 10 directly from Microsoft servers
-
-### Step 3: Select Windows Version (if downloading)
-If you chose to download, select your preferred Windows version:
-- Windows 11 25H2
-- Windows 10 Version 22H2
-
-Each version shows release date and system requirements.
-
-### Step 4: Select USB Drive
-- Connect your USB drive
-- Click "Refresh" if your drive isn't detected
-- Select the USB drive you want to use
-
-⚠️ **Warning**: All data on the selected USB drive will be permanently erased!
-
-### Step 5: Confirm and Create
-- Review the warning about data erasure
-- Check the consent checkbox
-- Click "Next" to begin USB creation
-
-### Step 6: Monitor Progress
-- Watch the real-time progress bar
-- View terminal output for detailed status
-- Wait for completion (this may take several minutes)
-
-### Step 7: Complete!
-Your bootable Windows USB drive is ready to use!
-
-## How It Works
-
-WinSpace uses standard Linux tools to create bootable USB drives:
-
-1. **Unmounts** the USB device
-2. **Creates** a new partition table (MSDOS)
-3. **Formats** the USB drive as FAT32
-4. **Mounts** the ISO and USB drive
-5. **Copies** all Windows installation files using `rsync`
-6. **Marks** the partition as bootable
-7. **Unmounts** both drives
-
-The process requires elevated privileges (via `pkexec` or `sudo`) to perform disk operations. You'll be prompted for your password once at the beginning of the USB creation process.
-
-## Technical Details
-
-- **Framework**: Flutter 3.10.0+
-- **Language**: Dart
-- **Platform**: Linux (primary), with support for other platforms
-- **Key Dependencies**:
-  - `url_launcher`: For opening external links
-  - `http`: For downloading Windows ISOs
-  - `path_provider`: For file system access
-  - `file_picker`: For selecting ISO files
-
-## Troubleshooting
-
-### USB Device Not Detected
-- Ensure the USB drive is properly connected
-- Try clicking the "Refresh" button
-- Check if the device appears in `lsblk` command
-- Make sure the device is not mounted elsewhere
-
-### Permission Denied Errors
-- Ensure `pkexec` or `sudo` is installed
-- Check that your user has permission to use `pkexec`
-- Look for password dialog windows (may be behind the main window)
-
-### Download Fails
-- Check your internet connection
-- Verify you have enough disk space
-- Try downloading again (Microsoft servers may be temporarily unavailable)
-
-### USB Creation Fails
-- Ensure the USB drive is at least 8 GB
-- Check that the ISO file is not corrupted
-- Verify all required system tools are installed (`parted`, `mkfs.vfat`, `rsync`)
-- Check terminal output for specific error messages
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/AmazingFeature`)
-3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
-4. Push to the branch (`git push origin feature/AmazingFeature`)
-5. Open a Pull Request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Support
-
-If you find WinSpace useful, consider supporting the project:
-
-- ☕ [Buy Me a Coffee](https://buymeacoffee.com/pratikmore)
-
-## Acknowledgments
-
-- Built with [Flutter](https://flutter.dev/)
-- Uses standard Linux tools for USB creation
-- Windows ISO downloads from official Microsoft servers
-
-## Disclaimer
-
-WinSpace is an independent project and is not affiliated with Microsoft Corporation. Windows is a trademark of Microsoft Corporation. Use this tool at your own risk. Always backup important data before creating bootable USB drives.
+WinSpace is a production-ready Flutter application that enables Linux users to create UEFI-compatible bootable Windows installation media with enterprise-grade reliability and security.
 
 ---
 
-**Made with ❤️ for Linux users**
+## Overview
+
+WinSpace automates the entire process of creating bootable Windows USB drives on Linux systems. It handles ISO downloads, device detection, partition management, filesystem creation, and file synchronization with comprehensive error handling and real-time progress monitoring.
+
+### Key Capabilities
+
+- **Direct ISO Downloads**: Downloads Windows 11/10 ISOs directly from Microsoft's official distribution servers
+- **UEFI Boot Support**: Creates GPT partition tables with Microsoft Basic Data partitions for maximum compatibility
+- **Large File Handling**: Automatically splits `install.wim` files exceeding 4GB for FAT32 compatibility using `wimlib-imagex`
+- **Device Recovery**: Detects and repairs corrupted USB drives before flashing
+- **Real-time Monitoring**: Live terminal output with technical log messages for debugging and verification
+- **Security**: Uses `pkexec` for privilege escalation with proper sandboxing considerations
+
+---
+
+## Technical Architecture
+
+### Partitioning Strategy
+
+WinSpace implements a UEFI-compatible partitioning scheme optimized for Windows installation media:
+
+- **Partition Table**: GPT (GUID Partition Table) for UEFI compatibility
+- **Partition Type**: Microsoft Basic Data (type 0700) - ensures visibility in Windows Setup
+- **Filesystem**: FAT32 with 4096-byte cluster size for optimal compatibility
+- **Boot Method**: UEFI firmware automatically detects `/EFI/Boot/bootx64.efi`
+
+### File Handling
+
+- **WIM Splitting**: Automatically detects `install.wim` files >4GB and splits into `.swm` chunks (3800MB each)
+- **File Synchronization**: Uses `rsync` with `--no-owner --no-group` flags to prevent permission errors on FAT32
+- **Progress Tracking**: Real-time file transfer progress with percentage completion
+
+### Device Management
+
+- **Corruption Detection**: Validates device accessibility using `blockdev --getsz`
+- **Automatic Repair**: Uses `wipefs` and low-level `dd` operations to repair corrupted partition tables
+- **Mount Management**: Implements lazy unmount (`umount -l`) to prevent blocking operations
+
+---
+
+## System Requirements
+
+### Runtime Dependencies
+
+| Package | Purpose | Installation |
+|---------|---------|--------------|
+| `parted` | Partition table management | `sudo apt install parted` |
+| `dosfstools` | FAT32 filesystem creation | `sudo apt install dosfstools` |
+| `rsync` | Efficient file synchronization | `sudo apt install rsync` |
+| `wimtools` | WIM archive splitting | `sudo apt install wimtools` |
+| `gdisk` | Advanced GPT partitioning (optional) | `sudo apt install gdisk` |
+| `policykit-1` | Privilege escalation | `sudo apt install policykit-1` |
+
+### Hardware Requirements
+
+- **USB Drive**: Minimum 8GB capacity (16GB+ recommended for Windows 11)
+- **Disk Space**: 8-10GB free space for ISO downloads and temporary files
+- **Network**: Stable internet connection for ISO downloads (7-8GB files)
+
+### Development Dependencies
+
+```bash
+sudo apt install -y ninja-build clang libgtk-3-dev mesa-utils \
+  build-essential cmake pkg-config
+```
+
+---
+
+## Installation
+
+### Debian Package (Recommended)
+
+```bash
+# Download the latest .deb package from Releases
+sudo dpkg -i winspaces_*.deb
+sudo apt-get install -f  # Fix dependencies if needed
+```
+
+### From Source
+
+```bash
+git clone https://github.com/DarkVertana/WinSpace.git
+cd WinSpace
+flutter pub get
+flutter build linux --release
+./build/linux/x64/release/bundle/winspaces
+```
+
+---
+
+## Usage Workflow
+
+### 1. ISO Selection
+
+**Option A: Download from Microsoft**
+- Select "Download ISO file with app"
+- Choose Windows version (11 25H2 or 10 22H2)
+- Application downloads directly from Microsoft servers with progress tracking
+
+**Option B: Use Existing ISO**
+- Select "Select ISO file"
+- Browse and select your Windows ISO file
+- Application validates file size (minimum 3GB)
+
+### 2. USB Device Selection
+
+- Application automatically detects removable USB devices using `lsblk`
+- Displays device model, size, and mount status
+- Click "Refresh" to rescan for newly connected devices
+
+### 3. USB Creation Process
+
+The application performs the following operations (requires root privileges):
+
+1. **Device Validation**: Checks device accessibility and detects corruption
+2. **Partition Table Wipe**: Removes existing partition signatures
+3. **GPT Initialization**: Creates new GPT partition table
+4. **Partition Creation**: Creates Microsoft Basic Data partition (type 0700)
+5. **Filesystem Formatting**: Formats partition as FAT32
+6. **ISO Mounting**: Mounts Windows ISO as read-only loop device
+7. **File Analysis**: Checks `install.wim` size for splitting requirements
+8. **File Synchronization**: Copies all files using `rsync` (excludes `install.wim` if splitting needed)
+9. **WIM Splitting**: Splits large `install.wim` into `.swm` chunks if >4GB
+10. **EFI Configuration**: Ensures `bootx64.efi` is in `/EFI/Boot/` directory
+11. **Verification**: Validates boot files and Windows sources directory
+12. **Unmounting**: Safely unmounts all filesystems
+
+### 4. Progress Monitoring
+
+- Real-time progress bar with percentage completion
+- Terminal output toggle for detailed technical logs
+- Status messages for each operation phase
+- Error reporting with specific failure points
+
+---
+
+## Technical Implementation Details
+
+### Privilege Escalation
+
+WinSpace uses `pkexec` (preferred) or `sudo` for privilege escalation:
+- Single password prompt at process start
+- All disk operations executed in single elevated session
+- Process isolation for security
+
+### Error Handling
+
+- **Device Errors**: Automatic corruption detection and repair attempts
+- **Network Errors**: HTTP status code validation and retry logic
+- **File Errors**: WIM splitting fallback with automatic `wimtools` installation
+- **Mount Errors**: Lazy unmount fallback to prevent blocking
+
+### Logging System
+
+Technical log messages use standardized prefixes:
+- `[INFO]` - Informational messages
+- `[WARN]` - Warning conditions
+- `[ERROR]` - Error conditions
+- `[OK]` - Successful operations
+
+### Performance Optimizations
+
+- **Reduced setState Calls**: Only updates UI when values actually change
+- **Efficient List Operations**: Uses `removeRange()` for terminal output management
+- **Stream Management**: Proper cleanup of subscriptions and timers
+- **Memory Management**: Limits terminal output to last 100 lines
+
+---
+
+## Troubleshooting
+
+### Device Not Detected
+
+```bash
+# Verify device is visible to system
+lsblk -o NAME,SIZE,TYPE,MOUNTPOINT,MODEL
+
+# Check if device is marked as removable
+cat /sys/block/sdX/removable  # Should output "1"
+```
+
+### Permission Errors
+
+- Ensure `pkexec` is installed: `sudo apt install policykit-1`
+- Check PolicyKit configuration: `/etc/polkit-1/rules.d/`
+- Verify user is in appropriate groups
+
+### Corrupted Drive
+
+WinSpace automatically attempts repair, but manual intervention may be required:
+
+```bash
+# Wipe all filesystem signatures
+sudo wipefs -a /dev/sdX
+
+# Clear partition table
+sudo dd if=/dev/zero of=/dev/sdX bs=1M count=10
+
+# Re-run WinSpace
+```
+
+### WIM Splitting Fails
+
+```bash
+# Install wimtools manually
+sudo apt update
+sudo apt install wimtools
+
+# Verify installation
+wimlib-imagex --version
+```
+
+### Download Failures
+
+- Verify network connectivity
+- Check available disk space: `df -h`
+- Validate ISO URL accessibility
+- Review terminal output for HTTP error codes
+
+---
+
+## Security Considerations
+
+- **No Web Browser**: Eliminates attack surface from headless browsers
+- **TLS Enforcement**: Forces TLS 1.2+ for all network operations
+- **Input Validation**: All user inputs validated before processing
+- **Process Isolation**: Elevated operations isolated to single script execution
+- **Sandboxing**: Compatible with `bwrap` for additional isolation
+
+---
+
+## Development
+
+### Building Release Package
+
+```bash
+flutter build linux --release
+./build_deb.sh  # Creates .deb package
+```
+
+### Code Structure
+
+- `lib/main.dart`: Main application logic and UI
+- `linux/`: Linux-specific CMake configuration
+- `assets/`: Application icons and resources
+
+### Key Technologies
+
+- **Flutter 3.10.0+**: Cross-platform UI framework
+- **Dart 3.10.3+**: Programming language
+- **GTK 3**: Linux desktop integration
+- **CMake**: Native build system
+
+---
+
+## License
+
+MIT License - See [LICENSE](LICENSE) file for details.
+
+---
+
+## Support
+
+- **Issues**: [GitHub Issues](https://github.com/DarkVertana/WinSpace/issues)
+- **Contributions**: Pull requests welcome
+- **Donations**: [Buy Me a Coffee](https://buymeacoffee.com/pratikmore)
+
+---
+
+## Disclaimer
+
+WinSpace is an independent, open-source project and is not affiliated with Microsoft Corporation. Windows is a trademark of Microsoft Corporation. This tool is provided as-is without warranty. Always backup important data before creating bootable USB drives.
+
+---
+
+**Built with Flutter for Linux** | **Version 1.0.0**

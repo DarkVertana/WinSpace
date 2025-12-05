@@ -43,3 +43,13 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Package build artifacts
+/packages/
+/AppDir/
+/deb_package/
+/rpm_package/
+*.deb
+*.rpm
+*.AppImage
+appimagetool-x86_64.AppImage

@@ -46,9 +46,7 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
   String? _selectedWindowsVersion;
   String? _selectedUSBDevice;
   bool _consentGiven = false;
-  int _currentImageIndex = 0;
   double _progress = 0.0;
-  final PageController _pageController = PageController();
   bool _isDownloading = false;
   bool _downloadComplete = false;
   String? _downloadedISOPath;
@@ -60,16 +58,23 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
   List<String> _terminalOutput = [];
   bool _showTerminal = false;
   
+  // Resources that need cleanup
+  Timer? _heartbeatTimer;
+  Timer? _timeoutTimer;
+  StreamSubscription? _stdoutSubscription;
+  StreamSubscription? _stderrSubscription;
+  Process? _currentProcess;
+  
   final Map<String, Map<String, String>> _windowsVersions = {
     'Windows 11 25H2': {
       'releaseDate': 'October 2025',
       'requirements': '• Processor: 1 GHz or faster with 2 or more cores\n• RAM: 4 GB (64-bit)\n• Storage: 64 GB or larger\n• System firmware: UEFI, Secure Boot capable\n• TPM: Version 2.0\n• Graphics card: DirectX 12 compatible',
-      'isoUrl': 'https://software.download.prss.microsoft.com/dbazure/Win11_25H2_EnglishInternational_x64.iso?t=5cb0d9a4-b2ee-46fe-8931-9cb67a97c9a1&P1=1764400342&P2=601&P3=2&P4=o%2b2WN8Cbm9X9qtZNFAMbWRZUbvrJ1gDWkVPgSmkdf4Y2ym8Rs2ZOdukCk4ct9uaTyh3ApfPhQUqoDpylm07urMHOrwkpVJLHvl%2bGgbmYALqA%2fY1rllRxm1hDHsjTh690KYtKcW8piCxCOKUD%2bze0Vs4%2fpLQFeaxWlf3wuaF36YaOlvRiR3%2fTBsRanY1BpGnuOW2%2bbqVtTvHdLjoutKqTaZ16gMoEHZKG0l6SN3fCwckIpqGdPExybVp20eGp0e0F%2fCpZCCHBkC8UlJ56U%2fOd%2bKAe7V6dCTSa8DGjbyb94mfDX1idwjOAd83dCR57Nbk8OQjvi1sLq9QLbSF8fvgNcA%3d%3d',
+      'isoUrl': 'https://valflix.valtube.workers.dev/1:/WinSpace/Win11_25H2_EnglishInternational_x64.iso',
     },
     'Windows 10 Version 22H2': {
       'releaseDate': 'October 2022',
       'requirements': '• Processor: 1 GHz or faster\n• RAM: 1 GB (32-bit) or 2 GB (64-bit)\n• Storage: 16 GB (32-bit) or 20 GB (64-bit)\n• Graphics card: DirectX 9 or later',
-      'isoUrl': 'https://software.download.prss.microsoft.com/dbazure/Win10_22H2_EnglishInternational_x64v1.iso?t=a8bcd97c-f61b-4fb8-8013-ec5ec878f630&P1=1764958805&P2=601&P3=2&P4=0%2fWwW4SOvfVoyYYncJcYjT6%2bOvTiKn%2bDRQYyJPf%2bz%2f4eBOSu6N5OKCmMCn8rTeMzpvvh5ccSfTFeO5zXHDOtm%2fQK3%2ffPJxmDMdlpw3Qh35f7DKaQfj%2fSvQ1R0z7wrIJNZo4YmmLfkBD7PtG3T2xcMSAgE%2fqk5aISa8FwCa0BkFksupjpSQm%2bqE3WfSz57fwkQqAmuZbIas7ids1qkQ6W2v5sZeCGCymsSs78Lwgbt0XviDCiorU4BZiH%2f%2fQdWLjlY1ggefTXKG8SG0B2TQd4kjNETENp9P79rZJbvjnFprE5%2bzLzSLdydv%2fTNZ7NhkvQ0ZGWpHrRFmDfNk%2fGavSFfw%3d%3d',
+      'isoUrl': 'https://valflix.valtube.workers.dev/1:/WinSpace/Windows_10__22H2.iso',
     },
   };
 
@@ -201,11 +206,16 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
           if (contentLength > 0 && mounted) {
             final percent = (downloaded / contentLength * 100).toInt();
             final downloadedMB = (downloaded / (1024 * 1024)).toStringAsFixed(0);
+            final newProgress = downloaded / contentLength;
+            final newStatus = 'Downloading: $percent% ($downloadedMB MB / $contentLengthMB MB)';
             
-            setState(() {
-              _progress = downloaded / contentLength;
-              _downloadStatus = 'Downloading: $percent% ($downloadedMB MB / $contentLengthMB MB)';
-            });
+            // Only update if values changed (optimization)
+            if (_progress != newProgress || _downloadStatus != newStatus) {
+              setState(() {
+                _progress = newProgress;
+                _downloadStatus = newStatus;
+              });
+            }
             
             // Log every 5% progress to terminal
             if (percent % 5 == 0 && percent != lastLoggedPercent) {
@@ -377,7 +387,6 @@ class _WinSpacesMainWindowState extends State<WinSpacesMainWindow> {
 
     try {
       // Create shell script with all commands for UEFI bootable USB
-      // Uses Rufus-style partitioning for maximum compatibility
       // Handles large files (>4GB) by splitting install.wim for FAT32 compatibility
       // Use r'' for raw string to avoid interpolation issues, then replace variables
       final scriptContent = r'''#!/bin/bash
@@ -388,37 +397,118 @@ ISO_PATH="ISO_PATH_PLACEHOLDER"
 TEMP_DIR="TEMP_DIR_PLACEHOLDER"
 USB_MOUNT_DIR="USB_MOUNT_DIR_PLACEHOLDER"
 
-echo "Step 1: Unmounting USB device..."
+echo "[INFO] Unmounting existing filesystems on USB device..."
 umount "$USB_DEVICE"* 2>/dev/null || true
 sleep 1
 
-echo "Step 2: Wiping existing partition table..."
-# Clear first and last 1MB to remove any existing partition signatures
+echo "[INFO] Checking USB device accessibility and integrity..."
+# Check if device exists and is readable
+if [ ! -b "$USB_DEVICE" ]; then
+    echo "[ERROR] Device $USB_DEVICE does not exist or is not a block device"
+    exit 1
+fi
+
+# Try to read device size to check if it's accessible
+DEVICE_SIZE=0
+if command -v blockdev &> /dev/null; then
+    DEVICE_SIZE=$(blockdev --getsz "$USB_DEVICE" 2>/dev/null || echo "0")
+    if [ "$DEVICE_SIZE" = "0" ] || [ -z "$DEVICE_SIZE" ]; then
+        echo "[WARN] Device appears corrupted or unreadable, attempting repair..."
+        echo "[INFO] Performing low-level format to repair device..."
+        # Use wipefs to remove all filesystem signatures (if available)
+        if command -v wipefs &> /dev/null; then
+            wipefs -a "$USB_DEVICE" 2>/dev/null || true
+        else
+            echo "[INFO] wipefs not available, using dd for device repair..."
+        fi
+        # Clear first 10MB to remove any corrupted partition tables
+        dd if=/dev/zero of="$USB_DEVICE" bs=1M count=10 status=none 2>/dev/null || true
+        sync
+        sleep 2
+        # Re-check device
+        DEVICE_SIZE=$(blockdev --getsz "$USB_DEVICE" 2>/dev/null || echo "0")
+        if [ "$DEVICE_SIZE" = "0" ] || [ -z "$DEVICE_SIZE" ]; then
+            echo "[ERROR] Device repair failed. Please check USB drive connection and try again."
+            exit 1
+        fi
+        echo "[OK] Device repaired successfully"
+    fi
+else
+    echo "[WARN] blockdev not available, skipping device size check"
+fi
+
+echo "[INFO] Wiping partition table signatures from device..."
+# Clear first 1MB to remove any existing partition signatures
 dd if=/dev/zero of="$USB_DEVICE" bs=1M count=1 status=none 2>/dev/null || true
-dd if=/dev/zero of="$USB_DEVICE" bs=1M seek=$(($(blockdev --getsz "$USB_DEVICE") / 2048 - 1)) count=1 status=none 2>/dev/null || true
+
+# Clear last 1MB if we have device size
+if [ "$DEVICE_SIZE" -gt 0 ]; then
+    # Calculate last 1MB position (device size is in 512-byte sectors)
+    LAST_MB_SECTOR=$((DEVICE_SIZE - 2048))
+    if [ "$LAST_MB_SECTOR" -gt 0 ]; then
+        dd if=/dev/zero of="$USB_DEVICE" bs=512 seek=$LAST_MB_SECTOR count=2048 status=none 2>/dev/null || true
+    fi
+fi
+sync
 sleep 0.5
 
-echo "Step 2: Creating GPT partition table (Rufus-style for UEFI)..."
-# Use sgdisk for precise GPT control (like Rufus does)
+echo "[INFO] Initializing GPT partition table for UEFI compatibility..."
+# Use sgdisk for precise GPT control
 if command -v sgdisk &> /dev/null; then
-    echo "Using sgdisk for GPT partitioning..."
-    sgdisk --zap-all "$USB_DEVICE" 2>/dev/null || true
+    echo "[INFO] Using sgdisk utility for GPT partitioning..."
+    # Remove all existing partition tables
+    sgdisk --zap-all "$USB_DEVICE" 2>/dev/null || {
+        echo "[WARN] sgdisk --zap-all failed, attempting alternative method..."
+        if command -v wipefs &> /dev/null; then
+            wipefs -a "$USB_DEVICE" 2>/dev/null || true
+        fi
+        dd if=/dev/zero of="$USB_DEVICE" bs=1M count=1 status=none 2>/dev/null || true
+        sync
+        sleep 1
+    }
     # Create partition with type 0700 (Microsoft Basic Data) - NOT EFI System Partition
-    # This is what Rufus uses - UEFI firmware will still find /EFI/Boot/bootx64.efi
-    sgdisk -n 1:2048:0 -t 1:0700 -c 1:"WINSPACE" "$USB_DEVICE"
+    # UEFI firmware will still find /EFI/Boot/bootx64.efi automatically
+    if ! sgdisk -n 1:2048:0 -t 1:0700 -c 1:"WINSPACE" "$USB_DEVICE" 2>/dev/null; then
+        echo "[ERROR] Failed to create partition with sgdisk"
+        echo "[INFO] Falling back to parted utility..."
+        parted -s "$USB_DEVICE" mklabel gpt || {
+            echo "[ERROR] Failed to create GPT partition table"
+            exit 1
+        }
+        parted -s "$USB_DEVICE" mkpart primary fat32 1MiB 100% || {
+            echo "[ERROR] Failed to create partition"
+            exit 1
+        }
+        parted -s "$USB_DEVICE" name 1 "WINSPACE" 2>/dev/null || true
+        parted -s "$USB_DEVICE" set 1 msftdata on 2>/dev/null || true
+    fi
 else
-    echo "Using parted for GPT partitioning..."
-    parted -s "$USB_DEVICE" mklabel gpt
+    echo "[INFO] Using parted utility for GPT partitioning..."
+    # Remove existing partition table first
+    if command -v wipefs &> /dev/null; then
+        wipefs -a "$USB_DEVICE" 2>/dev/null || true
+    fi
+    dd if=/dev/zero of="$USB_DEVICE" bs=1M count=1 status=none 2>/dev/null || true
+    sync
+    sleep 1
+    
+    if ! parted -s "$USB_DEVICE" mklabel gpt; then
+        echo "[ERROR] Failed to create GPT partition table. Device may be corrupted."
+        exit 1
+    fi
     # Create partition starting at 1MiB for alignment
-    parted -s "$USB_DEVICE" mkpart primary fat32 1MiB 100%
-    parted -s "$USB_DEVICE" name 1 "WINSPACE"
+    if ! parted -s "$USB_DEVICE" mkpart primary fat32 1MiB 100%; then
+        echo "[ERROR] Failed to create partition. Device may be corrupted."
+        exit 1
+    fi
+    parted -s "$USB_DEVICE" name 1 "WINSPACE" 2>/dev/null || true
     # DO NOT set esp flag - that hides the partition from Windows Setup!
     # Just set msftdata flag for Microsoft Basic Data type
     parted -s "$USB_DEVICE" set 1 msftdata on 2>/dev/null || true
 fi
 sleep 0.5
 
-echo "Step 2: Probing partitions..."
+echo "[INFO] Probing kernel for new partition table..."
 partprobe "$USB_DEVICE"
 sleep 2
 
@@ -428,27 +518,26 @@ if [ -b "${USB_DEVICE}1" ]; then
 elif [ -b "${USB_DEVICE}p1" ]; then
     PARTITION="${USB_DEVICE}p1"
 else
-    echo "ERROR: Could not find partition"
+    echo "[ERROR] Could not detect partition device node"
     exit 1
 fi
-echo "Partition detected: $PARTITION"
+echo "[INFO] Partition device node: $PARTITION"
 
-echo "Step 3: Formatting USB drive as FAT32 (large cluster for better compatibility)..."
+echo "[INFO] Creating FAT32 filesystem with 4096-byte cluster size..."
 # Use cluster size 4096 (default) which works well for most USB drives
 # Label limited to 11 chars for FAT32
 mkfs.fat -F 32 -n "WINSPACE" "$PARTITION"
 sleep 1
 
-echo "Step 4: Creating mount directories..."
+echo "[INFO] Creating temporary mount point directories..."
 mkdir -p "$TEMP_DIR"
 mkdir -p "$USB_MOUNT_DIR"
 
-echo "Step 4: Mounting ISO and USB drive..."
+echo "[INFO] Mounting ISO image (read-only) and USB partition..."
 mount -o loop,ro "$ISO_PATH" "$TEMP_DIR"
 mount "$PARTITION" "$USB_MOUNT_DIR"
 
-echo "Step 5: Checking for large files (FAT32 has 4GB limit)..."
-
+echo "[INFO] Analyzing install.wim file size (FAT32 4GB file size limit)..."
 # Check if install.wim exists and is larger than 4GB (4294967296 bytes)
 INSTALL_WIM=""
 if [ -f "$TEMP_DIR/sources/install.wim" ]; then
@@ -460,42 +549,42 @@ fi
 NEED_SPLIT=false
 if [ -n "$INSTALL_WIM" ]; then
     WIM_SIZE=$(stat -c%s "$INSTALL_WIM" 2>/dev/null || echo "0")
-    echo "Found install.wim: $((WIM_SIZE / 1024 / 1024)) MB"
+    echo "[INFO] install.wim size: $((WIM_SIZE / 1024 / 1024)) MB"
     if [ "$WIM_SIZE" -gt 4294967296 ]; then
-        echo "WARNING: install.wim is larger than 4GB ($((WIM_SIZE / 1024 / 1024)) MB)"
-        echo "Will split into smaller files for FAT32 compatibility..."
+        echo "[WARN] install.wim exceeds FAT32 4GB file size limit ($((WIM_SIZE / 1024 / 1024)) MB)"
+        echo "[INFO] Will split into SWM chunks for FAT32 compatibility..."
         NEED_SPLIT=true
     fi
 fi
 
-echo "Step 6: Copying Windows files to USB drive..."
-echo "This may take several minutes depending on ISO size..."
+echo "[INFO] Starting file synchronization to USB device..."
+echo "[INFO] Estimated time: several minutes depending on ISO size..."
 
 if [ "$NEED_SPLIT" = true ]; then
     # Copy all files EXCEPT install.wim (will handle separately)
-    echo "Copying files (excluding large install.wim)..."
+    echo "[INFO] Copying filesystem contents (excluding install.wim)..."
     rsync -r -v --progress --no-owner --no-group --exclude='install.wim' "$TEMP_DIR"/ "$USB_MOUNT_DIR"/
     
-    echo "Step 6b: Splitting install.wim for FAT32 compatibility..."
+    echo "[INFO] Splitting install.wim into SWM chunks (3800MB per chunk)..."
     # Check if wimlib-imagex is available
     if command -v wimlib-imagex &> /dev/null; then
-        echo "Using wimlib-imagex to split install.wim into 3800MB chunks..."
+        echo "[INFO] Using wimlib-imagex to split WIM archive..."
         mkdir -p "$USB_MOUNT_DIR/sources"
         wimlib-imagex split "$INSTALL_WIM" "$USB_MOUNT_DIR/sources/install.swm" 3800
-        echo "Successfully split install.wim into .swm files"
+        echo "[INFO] WIM archive successfully split into SWM files"
     else
-        echo "WARNING: wimlib-imagex not found. Attempting to install..."
+        echo "[WARN] wimlib-imagex not found in PATH, attempting installation..."
         apt-get update && apt-get install -y wimtools 2>/dev/null || true
         
         if command -v wimlib-imagex &> /dev/null; then
-            echo "Using wimlib-imagex to split install.wim..."
+            echo "[INFO] Using wimlib-imagex to split WIM archive..."
             mkdir -p "$USB_MOUNT_DIR/sources"
             wimlib-imagex split "$INSTALL_WIM" "$USB_MOUNT_DIR/sources/install.swm" 3800
-            echo "Successfully split install.wim into .swm files"
+            echo "[INFO] WIM archive successfully split into SWM files"
         else
-            echo "ERROR: Cannot split large file. Please install wimtools:"
-            echo "  sudo apt install wimtools"
-            echo "Then try again."
+            echo "[ERROR] wimlib-imagex not available. Please install wimtools:"
+            echo "[ERROR]   sudo apt install wimtools"
+            echo "[ERROR] Then retry the operation."
             exit 1
         fi
     fi
@@ -504,7 +593,7 @@ else
     rsync -r -v --progress --no-owner --no-group "$TEMP_DIR"/ "$USB_MOUNT_DIR"/
 fi
 
-echo "Step 7: Ensuring EFI boot files are in correct location..."
+echo "[INFO] Configuring EFI bootloader directory structure..."
 # Create EFI Boot directory structure if not exists
 mkdir -p "$USB_MOUNT_DIR/EFI/Boot"
 
@@ -519,37 +608,36 @@ elif [ -f "$TEMP_DIR/EFI/boot/bootx64.efi" ]; then
     cp "$TEMP_DIR/EFI/boot/bootx64.efi" "$USB_MOUNT_DIR/EFI/Boot/bootx64.efi"
 fi
 
-echo "Step 8: Verifying USB contents..."
-echo "Checking for required boot files..."
+echo "[INFO] Verifying USB device contents and boot configuration..."
+echo "[INFO] Checking for required EFI boot files..."
 if [ -f "$USB_MOUNT_DIR/EFI/Boot/bootx64.efi" ] || [ -f "$USB_MOUNT_DIR/efi/boot/bootx64.efi" ]; then
-    echo "✓ EFI boot file found"
+    echo "[OK] EFI bootloader (bootx64.efi) found"
 else
-    echo "WARNING: EFI boot file not found - USB may not boot on UEFI systems"
+    echo "[WARN] EFI bootloader not found - USB may not boot on UEFI systems"
 fi
 if [ -d "$USB_MOUNT_DIR/sources" ]; then
-    echo "✓ Windows sources folder found"
+    echo "[OK] Windows installation sources directory found"
 fi
 
-echo "Step 9: Syncing and unmounting drives..."
-echo "Flushing all data to USB drive (this may take a moment)..."
+echo "[INFO] Flushing filesystem buffers to USB device..."
 sync
-echo "Data sync complete."
+echo "[INFO] Filesystem sync completed"
 
 # Function to unmount (non-blocking approach)
 unmount_safe() {
     local mount_point=$1
     local name=$2
     
-    echo "Unmounting $name..."
+    echo "[INFO] Unmounting $name filesystem..."
     
     # Try normal unmount first (non-blocking check)
     if umount "$mount_point" 2>/dev/null; then
-        echo "$name unmounted successfully"
+        echo "[OK] $name filesystem unmounted successfully"
         return 0
     fi
     
     # If normal unmount failed, use lazy unmount (doesn't block)
-    echo "Using lazy unmount for $name (non-blocking)..."
+    echo "[INFO] Normal unmount failed, attempting lazy unmount (non-blocking)..."
     umount -l "$mount_point" 2>/dev/null || true
     
     # Wait a moment for lazy unmount to process
@@ -557,38 +645,38 @@ unmount_safe() {
     
     # Check if still mounted
     if mountpoint -q "$mount_point" 2>/dev/null; then
-        echo "Attempting force unmount for $name..."
+        echo "[WARN] Lazy unmount incomplete, attempting force unmount..."
         umount -f "$mount_point" 2>/dev/null || true
         sleep 1
         
         # Final check
         if mountpoint -q "$mount_point" 2>/dev/null; then
-            echo "WARNING: $name may still be mounted at $mount_point"
-            echo "This is usually safe - you can unmount manually later if needed"
+            echo "[WARN] $name may still be mounted at $mount_point"
+            echo "[INFO] Manual unmount may be required: umount $mount_point"
             return 1
         else
-            echo "✓ $name unmounted successfully (force)"
+            echo "[OK] $name filesystem unmounted (force unmount)"
             return 0
         fi
     else
-        echo "✓ $name unmounted successfully (lazy)"
+        echo "[OK] $name filesystem unmounted (lazy unmount)"
         return 0
     fi
 }
 
 # Unmount ISO first
-unmount_safe "$TEMP_DIR" "ISO"
+unmount_safe "$TEMP_DIR" "ISO image"
 
 # Check if anything is using the USB mount point (non-blocking, don't wait)
-echo "Checking for processes accessing USB..."
-lsof "$USB_MOUNT_DIR" 2>/dev/null | head -3 | grep -v COMMAND && echo "Note: Some processes may be accessing USB (this is usually fine)" || echo "No active processes found"
+echo "[INFO] Checking for processes with open file handles on USB device..."
+lsof "$USB_MOUNT_DIR" 2>/dev/null | head -3 | grep -v COMMAND && echo "[INFO] Active file handles detected (normal during unmount)" || echo "[INFO] No active file handles found"
 
 # Unmount USB drive
-unmount_safe "$USB_MOUNT_DIR" "USB drive"
+unmount_safe "$USB_MOUNT_DIR" "USB device"
 
 echo ""
-echo "✓ UEFI bootable Windows USB created successfully!"
-echo "You can safely remove the USB drive now."
+echo "[OK] UEFI bootable Windows USB device created successfully"
+echo "[INFO] USB device is ready for use. Safe to remove."
 '''
           .replaceAll('USB_DEVICE_PLACEHOLDER', usbDevice)
           .replaceAll('ISO_PATH_PLACEHOLDER', isoPath)
@@ -638,9 +726,11 @@ echo "You can safely remove the USB drive now."
         _addTerminalOutput('Note: sudo may require password input in terminal');
       }
 
+      // Store process reference for cleanup
+      _currentProcess = process;
+      
       // Add a heartbeat to show the process is still running
-      Timer? heartbeatTimer;
-      heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
+      _heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
         if (mounted) {
           _addTerminalOutput('⏳ Waiting for authentication... (Process PID: ${process.pid})');
         }
@@ -648,10 +738,9 @@ echo "You can safely remove the USB drive now."
 
       // Track if we've received any output (to detect if process is stuck waiting for password)
       bool hasReceivedOutput = false;
-      Timer? timeoutTimer;
       
       // Set a timeout to detect if process is stuck
-      timeoutTimer = Timer(const Duration(seconds: 30), () {
+      _timeoutTimer = Timer(const Duration(seconds: 30), () {
         if (!hasReceivedOutput && mounted) {
           _addTerminalOutput('');
           _addTerminalOutput('⚠️ WARNING: Process appears to be waiting for password input.');
@@ -661,147 +750,86 @@ echo "You can safely remove the USB drive now."
       });
 
       // Stream stdout in real-time
-      process.stdout.transform(const SystemEncoding().decoder).listen((data) {
+      _stdoutSubscription = process.stdout.transform(const SystemEncoding().decoder).listen((data) {
         hasReceivedOutput = true;
-        timeoutTimer?.cancel();
-        heartbeatTimer?.cancel();
+        _timeoutTimer?.cancel();
+        _heartbeatTimer?.cancel();
         final lines = data.split('\n');
         for (var line in lines) {
           if (line.trim().isNotEmpty) {
             _addTerminalOutput(line);
             
-            // Update progress based on steps
-                            if (line.contains('Step 1:')) {
-                              setState(() {
-                                _progress = 0.05;
-                                _usbCreationStatus = 'Unmounting USB device';
-                              });
-                            } else if (line.contains('Step 2: Wiping')) {
-                              setState(() {
-                                _progress = 0.08;
-                                _usbCreationStatus = 'Wiping existing partition table';
-                              });
-                            } else if (line.contains('Step 2: Creating GPT')) {
-                              setState(() {
-                                _progress = 0.12;
-                                _usbCreationStatus = 'Creating GPT partition (Rufus-style)';
-                              });
-                            } else if (line.contains('Using sgdisk')) {
-                              setState(() {
-                                _progress = 0.14;
-                                _usbCreationStatus = 'Creating Microsoft Basic Data partition';
-                              });
-                            } else if (line.contains('Using parted')) {
-                              setState(() {
-                                _progress = 0.14;
-                                _usbCreationStatus = 'Creating partition with parted';
-                              });
-                            } else if (line.contains('Step 3:')) {
-                              setState(() {
-                                _progress = 0.18;
-                                _usbCreationStatus = 'Formatting USB drive as FAT32';
-                              });
-                            } else if (line.contains('Step 4: Mounting')) {
-                              setState(() {
-                                _progress = 0.22;
-                                _usbCreationStatus = 'Mounting ISO and USB drive';
-                              });
-                            } else if (line.contains('Step 5:')) {
-                              setState(() {
-                                _progress = 0.25;
-                                _usbCreationStatus = 'Checking for large files...';
-                              });
-                            } else if (line.contains('WARNING: install.wim is larger')) {
-                              setState(() {
-                                _progress = 0.28;
-                                _usbCreationStatus = 'Large file detected, will split for FAT32';
-                              });
-                            } else if (line.contains('Step 6:') && !line.contains('Step 6b')) {
-                              setState(() {
-                                _progress = 0.30;
-                                _usbCreationStatus = 'Copying Windows files';
-                              });
-                            } else if (line.contains('Step 6b:')) {
-                              setState(() {
-                                _progress = 0.75;
-                                _usbCreationStatus = 'Splitting install.wim for FAT32';
-                              });
-                            } else if (line.contains('Successfully split')) {
-                              setState(() {
-                                _progress = 0.82;
-                                _usbCreationStatus = 'Split complete!';
-                              });
+            // Update progress based on log messages (optimized to reduce setState calls)
+                            if (line.contains('[INFO] Unmounting existing filesystems')) {
+                              _updateProgress(0.05, 'Unmounting existing filesystems');
+                            } else if (line.contains('[INFO] Checking USB device accessibility')) {
+                              _updateProgress(0.06, 'Checking device integrity');
+                            } else if (line.contains('[WARN] Device appears corrupted')) {
+                              _updateProgress(0.07, 'Repairing corrupted device');
+                            } else if (line.contains('[OK] Device repaired successfully')) {
+                              _updateProgress(0.075, 'Device repair completed');
+                            } else if (line.contains('[INFO] Wiping partition table')) {
+                              _updateProgress(0.08, 'Wiping partition table signatures');
+                            } else if (line.contains('[INFO] Initializing GPT partition table')) {
+                              _updateProgress(0.12, 'Initializing GPT partition table');
+                            } else if (line.contains('[INFO] Using sgdisk utility')) {
+                              _updateProgress(0.14, 'Creating partition with sgdisk');
+                            } else if (line.contains('[INFO] Using parted utility')) {
+                              _updateProgress(0.14, 'Creating partition with parted');
+                            } else if (line.contains('[INFO] Probing kernel')) {
+                              _updateProgress(0.16, 'Probing kernel for partition table');
+                            } else if (line.contains('[INFO] Partition device node')) {
+                              _updateProgress(0.17, 'Partition device detected');
+                            } else if (line.contains('[INFO] Creating FAT32 filesystem')) {
+                              _updateProgress(0.18, 'Formatting FAT32 filesystem');
+                            } else if (line.contains('[INFO] Mounting ISO image')) {
+                              _updateProgress(0.22, 'Mounting ISO and USB filesystems');
+                            } else if (line.contains('[INFO] Analyzing install.wim')) {
+                              _updateProgress(0.25, 'Analyzing WIM file size');
+                            } else if (line.contains('[WARN] install.wim exceeds FAT32')) {
+                              _updateProgress(0.28, 'Large file detected, splitting required');
+                            } else if (line.contains('[INFO] Starting file synchronization')) {
+                              _updateProgress(0.30, 'Synchronizing files to USB');
+                            } else if (line.contains('[INFO] Splitting install.wim')) {
+                              _updateProgress(0.75, 'Splitting WIM archive into SWM chunks');
+                            } else if (line.contains('[INFO] WIM archive successfully split')) {
+                              _updateProgress(0.82, 'WIM archive split completed');
                             } else if (line.contains('%')) {
                               // Parse rsync progress (e.g., "1,234,567  50%")
                               final progressMatch = RegExp(r'(\d+)%').firstMatch(line);
                               if (progressMatch != null) {
                                 final percent = int.tryParse(progressMatch.group(1) ?? '0') ?? 0;
-                                setState(() {
-                                  _progress = 0.30 + (percent / 100) * 0.45; // 30% to 75%
-                                  _usbCreationStatus = 'Copying Windows files: $percent%';
-                                });
+                                final newProgress = 0.30 + (percent / 100) * 0.45; // 30% to 75%
+                                _updateProgress(newProgress, 'File synchronization: $percent%');
                               }
-                            } else if (line.contains('Step 7:')) {
-                              setState(() {
-                                _progress = 0.85;
-                                _usbCreationStatus = 'Ensuring EFI boot files are correct';
-                              });
-                            } else if (line.contains('Step 8:')) {
-                              setState(() {
-                                _progress = 0.90;
-                                _usbCreationStatus = 'Verifying USB contents';
-                              });
-                            } else if (line.contains('Step 9:')) {
-                              setState(() {
-                                _progress = 0.92;
-                                _usbCreationStatus = 'Syncing and unmounting drives';
-                              });
-                            } else if (line.contains('Flushing all data')) {
-                              setState(() {
-                                _progress = 0.93;
-                                _usbCreationStatus = 'Flushing data to USB...';
-                              });
-                            } else if (line.contains('Data sync complete')) {
-                              setState(() {
-                                _progress = 0.94;
-                                _usbCreationStatus = 'Data sync complete';
-                              });
-                            } else if (line.contains('Unmounting ISO')) {
-                              setState(() {
-                                _progress = 0.95;
-                                _usbCreationStatus = 'Unmounting ISO...';
-                              });
-                            } else if (line.contains('Unmounting USB')) {
-                              setState(() {
-                                _progress = 0.96;
-                                _usbCreationStatus = 'Unmounting USB drive...';
-                              });
-                            } else if (line.contains('USB drive unmounted successfully') || 
-                                       line.contains('ISO unmounted successfully')) {
-                              setState(() {
-                                _progress = 0.98;
-                                _usbCreationStatus = 'Unmount complete';
-                              });
-                            } else if (line.contains('✓') && line.contains('UEFI bootable')) {
-                              setState(() {
-                                _progress = 1.0;
-                                _usbCreationStatus = 'UEFI bootable USB created!';
-                              });
-                            } else if (line.contains('You can safely remove')) {
-                              setState(() {
-                                _progress = 1.0;
-                                _usbCreationStatus = 'Complete! Safe to remove USB';
-                              });
+                            } else if (line.contains('[INFO] Configuring EFI bootloader')) {
+                              _updateProgress(0.85, 'Configuring EFI bootloader');
+                            } else if (line.contains('[INFO] Verifying USB device contents')) {
+                              _updateProgress(0.90, 'Verifying device contents');
+                            } else if (line.contains('[INFO] Flushing filesystem buffers')) {
+                              _updateProgress(0.92, 'Flushing filesystem buffers');
+                            } else if (line.contains('[INFO] Filesystem sync completed')) {
+                              _updateProgress(0.94, 'Filesystem sync completed');
+                            } else if (line.contains('[INFO] Unmounting') && line.contains('ISO')) {
+                              _updateProgress(0.95, 'Unmounting ISO filesystem');
+                            } else if (line.contains('[INFO] Unmounting') && line.contains('USB')) {
+                              _updateProgress(0.96, 'Unmounting USB filesystem');
+                            } else if (line.contains('[OK]') && line.contains('unmounted')) {
+                              _updateProgress(0.98, 'Filesystems unmounted');
+                            } else if (line.contains('[OK] UEFI bootable Windows USB')) {
+                              _updateProgress(1.0, 'USB device creation completed');
+                            } else if (line.contains('[INFO] USB device is ready')) {
+                              _updateProgress(1.0, 'Device ready for use');
                             }
           }
         }
       });
 
       // Stream stderr in real-time
-      process.stderr.transform(const SystemEncoding().decoder).listen((data) {
+      _stderrSubscription = process.stderr.transform(const SystemEncoding().decoder).listen((data) {
         hasReceivedOutput = true;
-        timeoutTimer?.cancel();
-        heartbeatTimer?.cancel();
+        _timeoutTimer?.cancel();
+        _heartbeatTimer?.cancel();
         if (data.trim().isNotEmpty) {
           _addTerminalOutput('Error: $data');
         }
@@ -829,7 +857,11 @@ echo "You can safely remove the USB drive now."
         process.kill();
         exitCode = -1;
       } finally {
-        timeoutTimer.cancel();
+        _timeoutTimer?.cancel();
+        _heartbeatTimer?.cancel();
+        _stdoutSubscription?.cancel();
+        _stderrSubscription?.cancel();
+        _currentProcess = null;
       }
 
       if (exitCode != 0) {
@@ -877,54 +909,44 @@ echo "You can safely remove the USB drive now."
   }
 
   void _addTerminalOutput(String line) {
-    if (mounted) {
-      setState(() {
-        _terminalOutput.add(line);
-        // Keep only last 100 lines
-        if (_terminalOutput.length > 100) {
-          _terminalOutput.removeAt(0);
-        }
-      });
-    }
-  }
-
-  void _startImageSlider() {
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted && _currentStep == 5) {
-        setState(() {
-          _currentImageIndex = (_currentImageIndex + 1) % 3;
-        });
-        _pageController.nextPage(
-          duration: const Duration(milliseconds: 500),
-          curve: Curves.easeInOut,
-        );
-        _startImageSlider();
-      }
-    });
-  }
-
-  void _animateProgress() {
-    // Only animate if not downloading
-    if (_isDownloading) return;
+    if (!mounted) return;
     
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted && _currentStep == 5 && _progress < 1.0 && !_isDownloading) {
-        setState(() {
-          _progress += 0.01;
-          if (_progress > 1.0) {
-            _progress = 1.0;
-            // Auto-advance to completion step after 1 second
-            Future.delayed(const Duration(seconds: 1), () {
-              if (mounted) {
-                setState(() => _currentStep = 6);
-              }
-            });
-          }
-        });
-        _animateProgress();
+    setState(() {
+      _terminalOutput.add(line);
+      // Keep only last 100 lines (more efficient than removeAt)
+      if (_terminalOutput.length > 100) {
+        _terminalOutput.removeRange(0, _terminalOutput.length - 100);
       }
     });
   }
+  
+  // Optimized progress update - only updates if values changed
+  void _updateProgress(double progress, String status) {
+    if (!mounted) return;
+    if (_progress == progress && _usbCreationStatus == status) return;
+    
+    setState(() {
+      _progress = progress;
+      _usbCreationStatus = status;
+    });
+  }
+  
+  @override
+  void dispose() {
+    // Clean up timers
+    _heartbeatTimer?.cancel();
+    _timeoutTimer?.cancel();
+    
+    // Clean up stream subscriptions
+    _stdoutSubscription?.cancel();
+    _stderrSubscription?.cancel();
+    
+    // Kill any running process
+    _currentProcess?.kill();
+    
+    super.dispose();
+  }
+
 
   void _handleBack() {
     if (_currentStep > 0) {
@@ -939,7 +961,6 @@ echo "You can safely remove the USB drive now."
         setState(() {
           _currentStep = 4;
           _progress = 0.0;
-          _currentImageIndex = 0;
         });
       } else if (_currentStep == 4) {
         // If on warning/consent step, go back to USB selection
@@ -2058,143 +2079,123 @@ echo "You can safely remove the USB drive now."
       );
     }
 
-    // Show USB creation steps after download completes (fallback for manual ISO)
-    final List<Map<String, dynamic>> progressImages = [
-      {
-        'title': 'Preparing USB Drive',
-        'description': 'Formatting and preparing the USB drive for installation',
-        'icon': Icons.usb,
-      },
-      {
-        'title': 'Copying Windows Files',
-        'description': 'Copying Windows installation files to USB drive',
-        'icon': Icons.file_copy,
-      },
-      {
-        'title': 'Creating Bootable Partition',
-        'description': 'Setting up bootable partition on USB drive',
-        'icon': Icons.storage,
-      },
-    ];
-
+    // Default: Show USB creation progress screen (should always be shown when on progress step)
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 600),
+        constraints: const BoxConstraints(maxWidth: 700),
         child: Padding(
           padding: const EdgeInsets.all(32.0),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Image Slider
-              SizedBox(
-                height: 300,
-                child: PageView.builder(
-                  controller: _pageController,
-                  itemCount: progressImages.length,
-                  onPageChanged: (index) {
-                    setState(() {
-                      _currentImageIndex = index;
-                    });
-                  },
-                  itemBuilder: (context, index) {
-                    final item = progressImages[index];
-                    return Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: Colors.blue[50],
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                          color: Colors.blue[200]!,
-                          width: 2,
-                        ),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Container(
-                            width: 120,
-                            height: 120,
-                            decoration: BoxDecoration(
-                              color: Colors.blue[100],
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              item['icon'] as IconData,
-                              size: 64,
-                              color: Colors.blue[700],
-                            ),
-                          ),
-                          const SizedBox(height: 24),
-                          Text(
-                            item['title']!,
-                            style: TextStyle(
-                              fontSize: 20,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.blue[900],
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          const SizedBox(height: 8),
-                          Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 32),
-                            child: Text(
-                              item['description']!,
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey[700],
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(height: 48),
-              // Progress Bar
-              Column(
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Text(
-                    '${(_progress * 100).toInt()}%',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.blue[700],
-                    ),
-                  ),
-                  const SizedBox(height: 16),
                   Container(
-                    height: 8,
+                    width: 120,
+                    height: 120,
                     decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(4),
-                      color: Colors.grey[200],
+                      color: Colors.green[100],
+                      shape: BoxShape.circle,
                     ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: _progress,
-                        backgroundColor: Colors.grey[200],
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          Colors.blue[600]!,
-                        ),
-                      ),
+                    child: Icon(
+                      _isCreatingUSB ? Icons.usb : Icons.check_circle,
+                      size: 64,
+                      color: Colors.green[700],
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _progress < 1.0
-                        ? 'Creating Windows USB installer...'
-                        : 'Windows USB installer created successfully!',
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Colors.grey[600],
+                  const SizedBox(width: 16),
+                  IconButton(
+                    icon: Icon(
+                      _showTerminal ? Icons.terminal : Icons.terminal_outlined,
+                      size: 32,
+                      color: Colors.blue[600],
                     ),
+                    tooltip: 'Show Terminal Output',
+                    onPressed: () {
+                      setState(() {
+                        _showTerminal = !_showTerminal;
+                      });
+                    },
                   ),
                 ],
               ),
+              const SizedBox(height: 32),
+              Text(
+                _isCreatingUSB ? 'Creating Windows Bootable USB' : 'Preparing USB Creation',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.green[900],
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                _isCreatingUSB ? _usbCreationStatus : 'Initializing...',
+                style: TextStyle(
+                  fontSize: 16,
+                  color: Colors.grey[700],
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 32),
+              LinearProgressIndicator(
+                value: _progress,
+                backgroundColor: Colors.grey[300],
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.green[600]!),
+                minHeight: 8,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '${(_progress * 100).toStringAsFixed(1)}%',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey[600],
+                ),
+              ),
+              if (_showTerminal) ...[
+                const SizedBox(height: 24),
+                Container(
+                  height: 300,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey[700]!),
+                  ),
+                  padding: const EdgeInsets.all(12),
+                  child: SingleChildScrollView(
+                    reverse: true,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: _terminalOutput.map((line) {
+                        Color textColor = Colors.greenAccent;
+                        if (line.contains('✗') || line.contains('Error')) {
+                          textColor = Colors.redAccent;
+                        } else if (line.contains('✓')) {
+                          textColor = Colors.lightGreenAccent;
+                        } else if (line.contains('===')) {
+                          textColor = Colors.cyanAccent;
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text(
+                            line,
+                            style: TextStyle(
+                              fontFamily: 'monospace',
+                              fontSize: 12,
+                              color: textColor,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
